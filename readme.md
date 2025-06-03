@@ -24,6 +24,7 @@ All parameters in the following list must be defined, and no others are availabl
 * zmax    -  The simulation length (i.e. the length of the fiber) in meters.
 * Nt      -  Number of points in data grid.
 * tmax    -  The max time in seconds before/after the central peak of the pulse to simulate; defines max values for spatial and Fourier space.
+* Gas     -  The type of gas used in the simulation; allowed values are "Argon" or "Neon".
 View params.yaml for an example.
 
 ## Analysis
