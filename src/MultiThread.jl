@@ -6,17 +6,26 @@ using Distributed
 using Base.Iterators: product
 using ProgressMeter
 using YAML
+
 #=
 To run, simply use:
 ```
-julia multi-thread.jl <parameter file> <#saves>
+julia MultiThread.jl <parameter file> <#saves>
+
+#saves adjusts the number of length intervalls saved for a given set of parameters
 ```
 e.g:
+julia MultiThread.jl params.yaml 10
 ```
-julia multi-thread.jl params.yaml 10
+Packages needed
+
+Pkg.add("Dierckx")
+Pkg.add("SpecialFunctions")
+Pkg.add("ProgressMeter")
+Pkg.add("YAML")
+Pkg.add("FFTW")
 ```
 =#
-
 
 @everywhere function write_stacktrace(fn, st)
     open(fn*"/error", "w") do f
@@ -27,7 +36,7 @@ end
 #=
     runSim(p, numSaves)
 
-given a dictionary of inital paremeters, and a number of times to save, performs
+given a dictionary of inital parameters, and a number of times to save, performs
 the entire simulation with those parameters.
 =#
 @everywhere function runSim(p, numSaves)
@@ -35,9 +44,11 @@ the entire simulation with those parameters.
     # Derive additional constants and spatial grids
     derive_constants(p)
     # Generate folder string
-    fname = @sprintf("%.0fnm_%04.0fuJ_%.2fbar_%.2fbar_%.0ffs_%.1fm_%.0ffs^2_%.0fum",
+
+    fname = @sprintf("%.0fnm_%04.0fuJ_%.2fbar_%.2fbar_%.0ffs_%.1fm_%.0ffs^2_%.0fum_%s",
                     p["λ"]*1E9, p["Energy"]*1E6, p["Pin"], p["Pout"], p["Tfwhm"]*1E15,
-                    p["zmax"], p["Chirp"], p["fiberD"]*1E6)
+                    p["zmax"], p["Chirp"], p["fiberD"]*1E6, p["Gas"])
+ 
     # Initialize electric field
     E, zinit = initialize(fname, p, "resume" in ARGS, "keep" in ARGS)
     # Save inital data
@@ -62,10 +73,16 @@ lists = YAML.load(open(ARGS[1]))
 # If paramter is a list of form [initial, final, stepsize] convert to list
 # of all paramters in range. Otherwise keep it as a single value.
 for key in keys(lists)
-    if length(lists[key]) != 1
-        lists[key] = collect(lists[key][1]:lists[key][3]:lists[key][2])
+    val = lists[key]
+    if isa(val, AbstractArray) && length(val) != 1 && !(isa(val[1], String) || isa(val[1], Symbol))
+        # Numeric sweep case
+        lists[key] = collect(val[1]:val[3]:val[2])
+    elseif isa(val, AbstractArray)
+        # Regular list of values (including strings)
+        lists[key] = val
     else
-        lists[key] = lists[key][1]
+        # Single value
+        lists[key] = val
     end
 end
 
@@ -84,7 +101,6 @@ else
     println("No number of saves passed, assuming 2")
     numSaves = 2
 end
-
 print("Starting Simulations\n")
 
 # Setup progres bar, with initial print of 0%
