@@ -27,10 +27,11 @@ end
 # Fixed Constants #
 ###################
 # Setup constants
-const losses  = 0.13          # Absorption Coef.        1/m
-const Ui_Ar   = 15.75*1.6E-19 # Ionization Energy of Ar J
-const α       = 7E-13         # ???
-const Zeff_Ar = 1.0           # Effective Charge of ionized Argon
+const losses  = 0.13          # Absorption Coef. (David: of the fiber) 1/m
+const Ui_Ar   = 15.75*1.6E-19 # Ionization Energy of Ar 
+const Ui_Ne   = 21.5645*1.6E-19 #Ionization Energy of Ne
+const α       = 7E-13         # ???y (David, something with plasma)
+const Zeff_Ar = 1.0           # Effective Charge of ionized Argon and Neon
 
 # General Physics Constants
 const c  = 299792458.0      # Speed of light     m/s
@@ -42,6 +43,7 @@ const Kb = 1.38064852E-23   # Boltzmann Constant J/K
 const T  = 300.0            # ~Room Temperature  K
 
 # Indices of refraction/dispersion for Argon 1/nm
+## reference Argon and Neon: https://doi.org/10.1016/0022-4073(81)90057-1  
 const C1 = 0.012055
 const C2 = 0.2075
 const C3 = 91.012
@@ -51,7 +53,16 @@ const C6 = 4.3330
 const C7 = 214.02
 C = [C1,C2,C3,C4,C5,C6,C7]
 
-#Indices of Refraction for Fused Silica 1/nm
+# Indices of refraction/dispersion for Neon 1/nm
+const CN1 = 0.012055
+const CN2 = 0.1063
+const CN3 = 184.661
+const CN4 = 182.90
+const CN5 = 376.840
+CN = [CN1,CN2,CN3,CN4,CN5]
+
+# Indices of Refraction for Fused Silica 1/nm
+# https://opg.optica.org/josa/abstract.cfm?uri=josa-55-10-1205
 const Cfs1 = 0.6961663
 const Cfs2 = 0.0684043
 const Cfs3 = 0.4079426
@@ -62,7 +73,7 @@ Cfs = [Cfs1,Cfs2,Cfs3,Cfs4,Cfs5,Cfs6]
 
 # Plasma Ionization Constants
 const a0 = -185.8
-const a1 =  11.16
+const a1 =  11.16   
 const a2 =  4.763e-3
 const a3 = -9.946e-4
 const a4 = -9.722e-5
@@ -136,10 +147,13 @@ function saveParams(fname, p)
         write(f, @sprintf("Pout:      [%f]\n", p["Pout"]))
         write(f, @sprintf("fiberD:    [%e]\n", p["fiberD"]))
         if haskey(p, "Chirp")
-            write(f, @sprintf("Chirp:     [%d]\n",     p["Chirp"]))
+            write(f, @sprintf("Chirp:     [%d]\n", p["Chirp"]))
         end
         if haskey(p, "TOD")
-            write(f, @sprintf("TOD:       [%d]\n",     p["TOD"]))
+            write(f, @sprintf("TOD:       [%d]\n", p["TOD"]))
+        end
+        if haskey(p, "Gas")
+            write(f, "Gas:       $(p["Gas"])\n")
         end
     end
     writedlm("$fname/t_vec", p["t_vec"])
@@ -149,7 +163,7 @@ end
     initialize(fname, p, resume, keep)
 
 Initializes a simulation given a folder name that may or may not already contain
-data. Folder name should be relevant to the paramters in p. If resume is true,
+data. Folder name should be relevant to the parameters in p. If resume is true,
 will attempt to continue a simulaiton. If keep is true, will not overwrite old
 data already present in folder given by fname.
 """
@@ -199,7 +213,7 @@ function derive_constants(p)
         merge!(p, Dict("λ" => pop!(p, "lambda")))
     end
 
-    f      = c / p["λ"]                 # Pulse Frequency Hz
+    f      = c / p["λ"]                   # Pulse Frequency Hz
     ω      = 2*pi*f                       # Pulse Angular Frequency
     σ_t    = p["Tfwhm"]/sqrt(2*log(2))    # 1-sigma width of pulse
     Power  = sqrt(2/pi) * p["Energy"]/σ_t # Max power delivered by pulse
@@ -217,10 +231,19 @@ function derive_constants(p)
     # Peak centered angular frequency grid
     ωω_tot = ω .+ ωω
 
-    # Nonlinear index of refraction
-    n_tot_0 = 1 .+ C1 * (C2 * (λ_tot_micron.^2) ./ (C3 * (λ_tot_micron.^2) .- 1) +
-                         C4 * (λ_tot_micron.^2) ./ (C5 * (λ_tot_micron.^2) .- 1) +
-                         C6 * (λ_tot_micron.^2) ./ (C7 * (λ_tot_micron.^2) .- 1))
+    if p["Gas"] == "Argon"
+        # Argon Sellmeier equation
+        n_tot_0 = 1 .+ C1 * (C2 * (λ_tot_micron.^2) ./ (C3 * (λ_tot_micron.^2) .- 1) +
+                              C4 * (λ_tot_micron.^2) ./ (C5 * (λ_tot_micron.^2) .- 1) +
+                              C6 * (λ_tot_micron.^2) ./ (C7 * (λ_tot_micron.^2) .- 1))
+    elseif p["Gas"] == "Neon"
+        # Neon Sellmeier equation
+        n_tot_0 = 1 .+ CN1 * (CN2 * (λ_tot_micron.^2) ./ (CN3 * (λ_tot_micron.^2) .- 1) +
+                              CN4 * λ_tot_micron ./ (CN5 * λ_tot_micron .- 1))
+    else
+        error("Unknown gas type: $(p["Gas"])")
+    end
+
 
     λ_min = 400
     λ_max = 1500
@@ -263,8 +286,8 @@ end
     initField(p)
 
 Returns a vector representing an electric field defined in terms of the
-peak power and spread of the intial gaussian pulse. Can also handle
-Chirp and TOD. All paramters read from dictionary p.
+peak power and spread of the initial gaussian pulse. Can also handle
+Chirp and TOD. All parameters read from dictionary p.
 """
 function initField(p)
     E             = exp.(-p["t_vec"].^2/p["σ_t"]^2)
@@ -297,6 +320,7 @@ end
     calc_duration(E, t1)
 
 Computes the FHWM of a gaussian peak, doesn't appear to work properly.
+David: Also not used.(input in savedata, however not used in savedata)
 """
 function calc_duration(E, t1) #tested
     center_pulse = sum(t1.*(abs2.(E)))/sum(abs2.(E))
@@ -307,7 +331,7 @@ end
 """
     prop_lin(p, E, deriv_t_2, losses, ft, ift)
 
-Computes the linear evoltion of a field E. deriv_t_2 is computed in sim step.
+Computes the linear evolution of a field E. deriv_t_2 is computed in sim step.
 ft and ift are pre-planned FFT matrices for forward and reverse FT. losses is
 the absorption coeff of the fiber.
 """
@@ -354,12 +378,12 @@ function NL_response(p, E, γs)
     =#
     NL = sum([γs[i] * abs.(E).^(2*i) for i in eachindex(γs)]) * p["dz"]
     Temp = NL .* E
-    return (im / p["ω"]) *
+    return (im/ p["ω"]) *
            ((circshift(Temp,1) - circshift(Temp,-1))/(2 * p["dt"]))
 end
 
 """
-    steepening(p, E, γs)
+    steepening(p, E, γs)    
 
 Computes the evoltion of field E due to steepening.
 """
@@ -404,14 +428,24 @@ end
 
 Computes the index of refraction for a given pressure along the entire frequency
 range.
+    https://doi.org/10.1103/PhysRevLett.104.103903 Argon
+    https://doi.org/10.1007/s00340-013-5354-0      Neon
 """
-function calc_ns(pressure, n, n_tot, λ_tot) #tested
-    n2_800  = 1e-23   * pressure
-    n4_800  =-3.7e-42 * pressure
-    n6_800  = 4e-58   * pressure
-    n8_800  =-1.7e-75 * pressure
-    n10_800 = 8.8e-94 * pressure
-
+function calc_ns(pressure, n, n_tot, λ_tot, p) #tested
+    
+    if p["Gas"] == "Argon"
+        n2_800  = 1e-23   * pressure                                                
+        n4_800  =-3.7e-42 * pressure
+        n6_800  = 4e-58   * pressure
+        n8_800  =-1.7e-75 * pressure
+        n10_800 = 8.8e-94 * pressure
+    elseif p["Gas"] == "Neon"
+        n2_800  = 9.30e-25 * pressure
+        n4_800  = 0.0
+        n6_800  = 0.0
+        n8_800  = 0.0
+        n10_800 = 0.0
+    end
     n_800 = n_tot[argmin(abs.(λ_tot .- 800))]
     n2  = n2_800 * ((n^2 - 1)/(n_800^2-1))^4
     n4  = n4_800 * ((n^2 - 1)/(n_800^2-1))^6
@@ -432,6 +466,7 @@ function plasma_potential(E,p,Ui) #Tested
     Derived From PPT Theory
     http://jetp.ac.ru/cgi-bin/dn/e_023_05_0924.pdf
     """
+    ## New link: http://jetp.ras.ru/cgi-bin/dn/e_023_05_0924.pdf
     Zeff = 1
     Uh = 13.5984*ee                     # Hydrogen Ionization Potential
     ω_au = 4.1E16                       # Ionization Potential (1/s Natural)
@@ -443,11 +478,13 @@ function plasma_potential(E,p,Ui) #Tested
     β = 2 * γ ./ sqrt.(1 .+ γ.^2)
     α = 2 * asinh.(γ) - β
 
-    g = 3 ./ (2*γ) .* ((1 .+ 1 ./ (2*γ.^2)) .* asinh.(γ) - 1 ./ β)
+    g = 3 ./ (2*γ) .* ((1 .+ 1 ./ (2*γ.^2)) .* asinh.(γ) - 1 ./ β)  #formular 33 
     ν0 = Ui / (ħ*p["ω"])
     ν  = ν0 * (1 .+ 1 ./ (2*γ.^2))
     kmin = minimum(floor.(ν) .+ 1)
     # These Values are gas dependent, see paper.
+    ## orbital angular momentum l, magnetic quantum number m
+    ## both 0 for nobel gases
     l=0
     m=0
     n_star = Zeff * sqrt(Uh/Ui)
@@ -458,9 +495,10 @@ function plasma_potential(E,p,Ui) #Tested
 
     A = sum([4/sqrt(3*π) * γ.^2 ./ (1 .+ γ.^2) .* exp.(-α .* (z .- ν)) .*
              dawson.(sqrt.(complex(abs.(β.*(z .- ν))))) for z in kmin:kmin+2])
-
-    potential = ω_au * C_nl2 * f * sqrt(6/π) *
-                (Ui / (2 * Uh)) * A .*
+             
+    #Formular 54 probability of ionization
+    potential = ω_au * C_nl2 * f * sqrt(6/π) *                                       
+                (Ui / (2 * Uh)) * A .*                                  
                 (2 * E0./(E .* sqrt.(1 .+ γ.^2))).^(2 * n_star - abs(m) - 3/2) .*
                 exp.(-2 * E0 * g ./ (3*E))
 
@@ -489,7 +527,7 @@ end
 """
     simulate(E, p, zinit, fname, num_saves)
 
-Performs the full simuation of a pulse propagating. Saves results to fname. Will
+Performs the full simulation of a pulse propagating. Saves results to fname. Will
 save num_saves times with even propagation length between saves.
 """
 function simulate(E, p, zinit, fname, num_saves)
@@ -519,7 +557,11 @@ function simulate(E, p, zinit, fname, num_saves)
             # Saving every 'save_every' step
             saveData(fname, E,
                      calc_duration(E,p["t_vec"]*p["dt"]), z)
+            println(z)
         end
+        ## saves everytime, BIG File sizes, only changes the amount of saves not how it simulates
+        ## saveData(fname, E, calc_duration(E,p["t_vec"]*p["dt"]), z)
+
 
         open(fname * "/PlasmaDensity", "a") do f
             write(f, @sprintf("%.5e\n", ρ))
@@ -531,7 +573,7 @@ function simulate(E, p, zinit, fname, num_saves)
         z += p["dz"]
     end
 
-    #Save final data
+    # Save final data
     saveData(fname, E, calc_duration(E,p["t_vec"]*p["dt"]), z)
 end
 
@@ -550,13 +592,14 @@ function simStep(E, p, z, ft, ift)
     n_tot[p["λ_tot"] .> p["λ_max"]] .= n_max
     n_min = n_tot[findfirst(λ->λ==p["λ_min"], p["λ_tot"])]
     n_tot[p["λ_tot"] .< p["λ_min"]] .= n_min
-
+    
+    ## Calculation of Wavevectors and group velocity
     k_tot, ks = calc_ks(p, n_tot)
     n  = n_tot[findfirst(x->x==p["ω"],p["ωω_tot"])]
     vg = 1/ks[2]
 
     # Argon Parameters
-    ns = calc_ns(pressure_z, n, n_tot, p["λ_tot"])
+    ns = calc_ns(pressure_z, n, n_tot, p["λ_tot"],p)
     #β2 = pressure_z * ks[3]
     #β3 = pressure_z * ks[4]
     #β4 = pressure_z * ks[5]
@@ -564,11 +607,16 @@ function simStep(E, p, z, ft, ift)
     ρ_at = pressure_z * 1E5 / (Kb * T)
 
     # Plasma Parameters
-    σ_k = 2.81E-96 * p["Pout"]
+    #σ_k = 2.81E-96 * p["Pout"]
     σ   = (ks[1]*ee^2) ./ (p["ω"] * me * ϵ0) .* τ./(1+(p["ω"] * τ).^2)
     #β_k = 10.^(-4 * p["k_Ar"]) .* p["k_Ar"] * ħ .* p["ω"] * ρ_at * 0.21 * σ_k
     rrr = -im * ks[1]./(2 * n[1]^2 * p["ρ_crit"]) - 0.5 * σ
-    coeff2 = σ/Ui_Ar
+    if p["Gas"] == "Argon"
+        Ui_Gas=Ui_Ar
+    elseif p["Gas"] == "Neon"
+        Ui_Gas=Ui_Ne
+    end
+    coeff2 = σ/Ui_Gas
 
     # Dispersion and Laplacian Operators
     dv_t_2_op = k_tot .- ks[1] .- ks[2] * p["ωω"]
@@ -581,9 +629,9 @@ function simStep(E, p, z, ft, ift)
     E = steepening(p, E, γs)                          #Steepening
 
     # Plasma
-    U_ion = plasma_potential(E, p, Ui_Ar)
+    U_ion = plasma_potential(E, p, Ui_Gas)
     ρ = plasma(p, α, ρ_at, U_ion, E, coeff2)
-    plasma_loss = U_ion ./ (2 * abs.(E).^2) * Ui_Ar .* (ρ_at .- ρ) * p["dz"]
+    plasma_loss = U_ion ./ (2 * abs.(E).^2) * Ui_Gas .* (ρ_at .- ρ) * p["dz"]
     plasma_loss[isnan.(plasma_loss)] .= 0
 
     # Kerr and Plasma Propagation (NonLinear)
@@ -592,12 +640,15 @@ function simStep(E, p, z, ft, ift)
                       γs[3] * abs.(E).^6 +
                       γs[4] * abs.(E).^8 +
                       γs[5] * abs.(E).^10
-                     ) * p["dz"]
-
+                      ) * p["dz"]
+    # only Third order Kerr
+    #kerr_response = -(γs[1] * abs.(E).^2) * p["dz"]
+    
     E = prop_non_lin(p, E, rrr, ρ, plasma_loss, kerr_response)
 
     # Return electric field, and max plasma density in inverse cm.
     return E, maximum(ρ) * 1E-6
+
 end
 
 #module
