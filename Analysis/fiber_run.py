@@ -3,6 +3,7 @@ from itertools import groupby
 import numpy as np
 import numpy.fft as fft
 import metrics
+import matplotlib.pyplot as plt
 
 hbar_evpj = 6.626e-34 * 6.242e18  # Convert Hz to eV
 hc = 1239.84193 # Convert eV to nm
@@ -28,9 +29,16 @@ class fiber_run:
 
         # Load parameters
         with open(fname + "/params") as f:
-            self.params = yaml.load(f)
+            self.params = yaml.full_load(f)
             for key, val in self.params.items():
-                self.params[key] = float(val)
+                print(f"Key: {key}, Value: {val}")
+                #one params file saves the value for a parameter in a list and the other as plain text
+                if isinstance(val, list):
+                    self.params[key] = float(val[0])
+                elif isinstance(val, str):
+                    self.params[key] = val
+                else:
+                    self.params[key] = float(val)
 
         self.fix_units()
         self.metrics = metrics.populate_metrics(self, fname)
@@ -38,6 +46,10 @@ class fiber_run:
     # Returns a list of the spectra corresponding to each field
     def spectra(self, normed = False):
         return [spectrum(field, normed) for field in self.fields]
+    
+    def phases(self, normed=False):
+        e = self.make_energy_scale()
+        return [phase(field, energy_scale=e) for field in self.fields]
 
     def last_spectrum(self, normed = False):
         return spectrum(self.fields[-1], normed)
@@ -58,7 +70,7 @@ class fiber_run:
         p = fiber_run.params
         # Make freq axis
         Nt = p["Nt"]
-        dt     = p["tmax"]/(Nt-1)        # Time step
+        dt = p["tmax"]/(Nt-1)        # Time step
 
         points = np.arange(-Nt/2, Nt/2, 1)
         return points * dt
@@ -117,6 +129,32 @@ class fiber_run:
             return spectrum/max(spectrum)
         else:
             return spectrum * hc/np.power(e,2)
+    
+    def plot_field(self, field_index=-1, normed=False, p1=None, p2=None):
+        """
+        Plot the field (real and imaginary parts) for a given index in self.fields.
+        field_index: Index of the field to plot (defaults to the last field).
+        normed: Whether to normalize the field before plotting.
+        """
+        field = self.fields[field_index]  # Get the desired field (default is the last one)
+        t = self.make_time_scale()  # Generate the time scale for the x-axis
+        # Normalize if needed
+        if normed:
+            field = field / np.max(np.abs(field))
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(t, np.real(field), label="Real Part", color='blue', linewidth=1.5)
+        ax.plot(t, np.imag(field), label="Imaginary Part", color='red', linewidth=1.5)
+
+        ax.set_xlabel("Time (fs)")
+        ax.set_ylabel("Field Amplitude (arb.)")
+        if p1 is not None:
+            ax.set_title(f"Field vs Time (p1 = {p1} + p2 ={p2})")
+        else:
+            ax.set_title("Field vs Time")
+        ax.legend()
+        ax.grid(True)
+        plt.show()
 
 def spectrum(field, normed = False):
     # Flip field to have something moving in the right direction.
@@ -125,3 +163,10 @@ def spectrum(field, normed = False):
         return transform/np.max(transform)
     else:
         return transform
+    
+def phase(field, energy_scale=None):
+    # Flip field to have something moving in the right direction.
+    transform = np.angle(fft.fftshift(fft.fft(fft.fftshift(np.flip(field,0)))))
+    transform = transform[np.where(energy_scale > 0)]
+    transform = np.unwrap(transform)
+    return transform
